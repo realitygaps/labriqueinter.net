@@ -246,6 +246,7 @@ function find_cubes() {
   local ips=$(sudo arp-scan --local | grep -P '\t02' | awk '{ print $1 }')
   local addip=
   local addhost=
+  local knownhosts=0
   local i=0
 
   if [ -z "${ips}" ]; then
@@ -259,37 +260,55 @@ function find_cubes() {
     i=$(( i + 1 ))
 
     knownhost=$(awk "/$ip/ { print \$2 }" /etc/hosts | head -n1)
-    [ -z "${knownhost}" ] && knownhost=$ip
 
-    echo -e "  ${i}. ${ip} | ssh root@${knownhost} | https://${knownhost}"
+    if [ -z "${knownhost}" ]; then
+      knownhost=$ip
+    else
+      (( knownhosts++ )) || true
+    fi
+
+    echo "  ${i}. ${ip} | ssh root@${knownhost} | https://${knownhost}"
   done
 
-  echo -en "\nSelect an IP to add to your hosts file (just press Enter if not necessary): "
-  read addip
+  echo
 
-  if [ -z "${addip}" ]; then
-    exit_normal
-  fi
-
-  if [[ "${addip}" =~ ^[0-9]+$ ]]; then
-    addip=${ips[$(( addip - 1 ))]}
+  if [ "${knownhosts}" -ne "${#ips[@]}" ]; then
+    echo -n "Select an IP to add to your hosts file (just press Enter if not necessary): "
+    read addip
 
     if [ -z "${addip}" ]; then
-      exit_error "IP index not found"
+      exit_normal
     fi
+
+    if [[ "${addip}" =~ ^[0-9]+$ ]]; then
+      addip=${ips[$(( addip - 1 ))]}
+  
+      if [ -z "${addip}" ]; then
+        exit_error "IP index not found"
+      fi
+    fi
+  
+    if [[ ! "${addip}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+      exit_error "This is not an IPv4 nor an IP index"
+    fi
+  
+    echo -en "Choose a host name for this IP: "
+    read addhost
+  
+    echo -e "${addip}\t${addhost}" | sudo tee -a /etc/hosts > /dev/null
+  
+    info "IP successfully added to your hosts file"
+    echo -e "\n  ssh root@${addhost} | https://${addhost}\n"
+
+  elif [ "${knownhosts}" -eq 1 ]; then
+    echo "% ssh -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no root@${knownhost} 2> /dev/null"
+    echo "Press Enter to execute (or Ctrl-C to arbort)"
+    read
+
+    echo "Default Password: olinux"
+    ssh -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no "root@${knownhost}" 2> /dev/null
+    exit_normal
   fi
-
-  if [[ ! "${addip}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
-    exit_error "This is not an IPv4 nor an IP index"
-  fi
-
-  echo -en "Choose a host name for this IP: "
-  read addhost
-
-  echo -e "${addip}\t${addhost}" | sudo tee -a /etc/hosts > /dev/null
-
-  info "IP successfully added to your hosts file"
-  echo -e "\n  ssh root@${addhost} | https://${addhost}\n"
 }
 
 function autodetect_sdcardpath() {
@@ -581,7 +600,7 @@ function install_clear() {
   info "Please wait..."
 
   debug "Raw copying ${img_path} to ${opt_sdcardpath} (dd)"
-  sudo dd "if=${img_path}" of="${opt_sdcardpath}" bs=1M &> /dev/null
+  sudo dd if="${img_path}" of="${opt_sdcardpath}" bs=1M &> /dev/null
 
   debug "Flushing file system buffers (sync)"
   sudo sync
@@ -613,7 +632,7 @@ trap cleaning_exit EXIT
 trap cleaning_exit ERR
 trap cleaning_ctrlc INT
 
-while getopts "f:s:c:e2:dlh" opt; do
+while getopts "f:s:c:e2dlh" opt; do
   case $opt in
     f) opt_imgpath=$OPTARG ;;
     c) opt_md5path=$OPTARG ;;
